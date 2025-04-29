@@ -10,91 +10,118 @@ stock_files <- c("Aselsan_stock_data.csv", "Broadcom_stock_data.csv", "Intel_sto
                  "Saab AB_stock_data.csv", "Suncore Energy_stock_data.csv", 
                  "TechnipFMC_stock_data.csv", "Woodside Energy_stock_data.csv")
 
-all_log_returns_list <- list()
+# Base directory for stock files
+base_dir <- "C:/Users/Baron/Downloads/stock_data/content/stock_data/"
+
+# Read the first stock file to extract dates
+first_stock <- read.csv(paste0(base_dir, stock_files[1]))
+first_stock$Date <- as.Date(first_stock[, 1], format = "%Y-%m-%d")  # Assuming Date is in the first column
+dates <- tail(first_stock$Date, 3947)  # Extract the last 3947 dates
+
+# Create a matrix to store all log returns with dates as column names
+# +1 column for stock names
+all_log_returns_matrix <- matrix(NA, nrow = length(stock_files), ncol = length(dates))
+rownames(all_log_returns_matrix) <- sapply(stock_files, function(x) sub("_stock_data.csv", "", x))
+colnames(all_log_returns_matrix) <- as.character(dates)
 
 # Loop through each stock file and process it
-for (stock_file in stock_files) {
+for (i in 1:length(stock_files)) {
+  stock_file <- stock_files[i]
+  cat("\nProcessing", stock_file, "...\n")
   
   # Read the stock data
-  stock <- read.csv(paste0("C:/Users/Baron/Downloads/stock_data/content/stock_data/", stock_file))
+  stock <- read.csv(paste0(base_dir, stock_file))
   
-  # Extract the 'Close' column and remove the first two values
+  # Extract the 'Close' column
   closing_prices <- stock$Close
-  closing_prices <- closing_prices[3:length(closing_prices)]  # Remove the first two values
   
   # Convert to numeric
   closing_prices_numeric <- as.numeric(closing_prices)
   
-  closing_prices_interpolated <- approx(seq_along(closing_prices_numeric), closing_prices_numeric, 
-                                        xout = seq_along(closing_prices_numeric), method = "linear")$y
+  # Handle any NA values with linear interpolation
+  closing_prices_interpolated <- na.approx(closing_prices_numeric, na.rm = FALSE)
   
-  # Compute the difference between consecutive closing prices
+  # Compute log returns
   log_returns <- diff(log(closing_prices_interpolated))
   
-  log_returns = tail(log_returns, 3947)
+  # Take the last 3947 log returns to match our date range
+  log_returns <- tail(log_returns, length(dates))
+  
+  # Store in the matrix
+  all_log_returns_matrix[i, ] <- log_returns
   
   # Perform ADF test on original closing prices
-  adf_result_original <- adf.test(closing_prices_interpolated, alternative = "stationary")
-  
-  # Extract relevant ADF test results for the original data
-  df_stat_original <- adf_result_original$statistic
-  p_value_original <- adf_result_original$p.value
-  lag_order_original <- adf_result_original$lags
-  
-  # Print the ADF test result for the original data
-  cat("\nADF test result for", stock_file, "on original data:\n")
-  cat("Dickey-Fuller = ", df_stat_original, ", Lag order = ", lag_order_original, ", p-value = ", p_value_original, "\n")
+  tryCatch({
+    adf_result_original <- adf.test(closing_prices_interpolated, alternative = "stationary")
+    
+    # Extract relevant ADF test results for the original data
+    df_stat_original <- adf_result_original$statistic
+    p_value_original <- adf_result_original$p.value
+    lag_order_original <- adf_result_original$lags
+    
+    # Print the ADF test result for the original data
+    cat("\nADF test result for", stock_file, "on original data:\n")
+    cat("Dickey-Fuller = ", df_stat_original, ", Lag order = ", lag_order_original, ", p-value = ", p_value_original, "\n")
+  }, error = function(e) {
+    cat("ADF test failed on original data for", stock_file, ":", e$message, "\n")
+  })
   
   # Perform ADF test on the log-differenced prices
-  adf_result_log_diff <- adf.test(log_returns, alternative = "stationary")
+  tryCatch({
+    adf_result_log_diff <- adf.test(log_returns, alternative = "stationary")
+    
+    # Extract relevant ADF test results for the log-differenced data
+    df_stat_log_diff <- adf_result_log_diff$statistic
+    p_value_log_diff <- adf_result_log_diff$p.value
+    lag_order_log_diff <- adf_result_log_diff$lags
+    
+    # Print the ADF test result for the log-differenced data
+    cat("\nADF test result for", stock_file, "on log-differenced data:\n")
+    cat("Dickey-Fuller = ", df_stat_log_diff, ", Lag order = ", lag_order_log_diff, ", p-value = ", p_value_log_diff, "\n")
+  }, error = function(e) {
+    cat("ADF test failed on log returns for", stock_file, ":", e$message, "\n")
+  })
   
-  # Extract relevant ADF test results for the log-differenced data
-  df_stat_log_diff <- adf_result_log_diff$statistic
-  p_value_log_diff <- adf_result_log_diff$p.value
-  lag_order_log_diff <- adf_result_log_diff$lags
-  
-  # Print the ADF test result for the log-differenced data
-  cat("\nADF test result for", stock_file, "on log-differenced data:\n")
-  cat("Dickey-Fuller = ", df_stat_log_diff, ", Lag order = ", lag_order_log_diff, ", p-value = ", p_value_log_diff, "\n")
-  print(length(log_returns))
-  
-  all_log_returns_list[[stock_file]] <- log_returns
-  
-
   cat("\n----------------------------------------------------\n")
 }
 
-all_log_returns_df <- as.data.frame(do.call(rbind, all_log_returns_list))
+# Convert the matrix to a data frame with proper structure
+all_log_returns_df <- as.data.frame(all_log_returns_matrix)
 
-# Add stock names as row identifiers
-all_log_returns_df <- cbind(Stock = rownames(all_log_returns_df), all_log_returns_df)
+# Add a column name for the stock names when we export
+output_df <- cbind(Stock = rownames(all_log_returns_df), all_log_returns_df)
 
-write.csv(all_log_returns_df, "all_log_returns_wide_format.csv", row.names = FALSE)
+# Check dimensions
+cat("\nDimensions of the output data frame:", dim(output_df), "\n")
+cat("Number of dates:", length(dates), "\n")
+cat("Number of stocks:", length(stock_files), "\n")
 
-# Optional: Plots of Closing Prices and Log-Differenced Prices
+# Print sample of the data frame to verify format
+cat("\nSample of the output data frame:\n")
+print(head(output_df[, 1:min(6, ncol(output_df))]))  # Print first few columns only
+
+# Write to CSV
+write.csv(output_df, "all_log_returns_wide_format_fixed.csv", row.names = FALSE)
+cat("\nData successfully written to 'all_log_returns_wide_format.csv'\n")
+
+# Optional: Create plots for visual inspection
 if (FALSE) {
+  # Example plots for the first stock
+  stock_idx <- 1
+  stock_name <- rownames(all_log_returns_matrix)[stock_idx]
+  
+  # Plot log returns
+  dev.new()
+  plot(as.numeric(all_log_returns_matrix[stock_idx, ]), type = "l", col = "blue",
+       xlab = "Time", ylab = "Log Returns", 
+       main = paste("Log Returns for", stock_name))
+  
+  # ACF and PACF plots
+  dev.new()
+  acf(as.numeric(all_log_returns_matrix[stock_idx, ]), 
+      main = paste("ACF for", stock_name), col = "blue", lag.max = 50)
   
   dev.new()
-  plot(closing_prices_numeric, type = "l", col = "blue", 
-       xlab = "Time (Days)", ylab = "Closing Price", 
-       main = "Original Closing Prices Over Time")
-  
-  # Open a new page for the second plot
-  dev.new()
-  plot(log_diff_prices_clean, type = "l", col = "red", 
-       xlab = "Time (Days)", ylab = "Log-Differenced Price", 
-       main = "Log-Transformed Differenced Closing Prices Over Time")
-
-  windows()
-  plot(closing_prices_interpolated, type = "l", col = "green",
-       xlab = "Time (Days)", ylab = "Closing Price",
-       main = paste("Closing Prices for", stock_file))
-  
-  windows()
-  plot(log_returns, type = "l", col = "orange",
-       xlab = "Time (Days)", ylab = "Log Returns",
-       main = paste("Log Returns for", stock_file))
-  
-  
-  
-  }
+  pacf(as.numeric(all_log_returns_matrix[stock_idx, ]), 
+       main = paste("PACF for", stock_name), col = "red", lag.max = 50)
+}
